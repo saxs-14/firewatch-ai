@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     upload_dir: str = "./uploads"
     max_upload_mb: int = 30
     sensitivity_pct: float = 3.0  # min fire/smoke pixel coverage % to trigger an alert
+    api_key: str = "dev-local-key-change-me"
 
     class Config:
         env_file = ".env"
