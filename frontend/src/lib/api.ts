@@ -1,5 +1,5 @@
-const API_BASE = "";
-const API_KEY = (import.meta.env.VITE_API_KEY as string) || "dev-local-key-change-me";
+const API_BASE = (import.meta.env.VITE_API_BASE as string) || "https://firewatch-ai-607032555709.us-central1.run.app";
+const API_KEY = (import.meta.env.VITE_API_KEY as string) || "f989500f35c07b4e61d2943d3a835b135c71e25a1ede859f";
 
 export interface AlertEvent {
   id: number;
