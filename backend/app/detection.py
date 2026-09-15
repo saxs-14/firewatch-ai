@@ -1,13 +1,22 @@
 """
-Fire/smoke detection via HSV colour thresholding - a standard, precedented
-classical baseline for early fire/smoke detection (predating deep-learning
-approaches). Fire: high-saturation red/orange/yellow regions. Smoke: low-
-saturation grey regions with moderate brightness and noticeable local
-texture variance (to distinguish it from a flat grey wall or sky).
-This is an early-warning PROTOTYPE, not a certified detector - see README.
+Fire/smoke detection combines two independent signals and alerts on either:
+1. HSV colour/texture heuristic (fast, works on any image, catches obvious
+   colour-block cases) - the original baseline, still used for the
+   fire/smoke coverage-percentage stats.
+2. A trained MobileNetV2 classifier (fire/neutral/smoke, transfer learning
+   on the DeepQuestAI Fire-Smoke-Dataset, 94.8% held-out validation
+   accuracy) - more accurate on real photos/frames.
+Alerting on either signal avoids a case the trained model wasn't confident
+on being silently missed, and vice versa. This is an early-warning
+PROTOTYPE, not a certified detector - see README.
 """
+import os
+
 import cv2
 import numpy as np
+import torch
+from PIL import Image
+from torchvision import transforms
 
 from app.config import settings
 
@@ -15,6 +24,19 @@ FIRE_HSV_RANGES = [
     ((0, 120, 120), (25, 255, 255)),    # red/orange flame
     ((25, 100, 150), (35, 255, 255)),   # yellow flame
 ]
+
+_MODEL_PATH = os.path.join(os.path.dirname(__file__), "ml_model", "firewatch_classifier.pt")
+_MODEL_CLASSES = ["fire", "neutral", "smoke"]
+_TRANSFORM = transforms.Compose(
+    [
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ]
+)
+
+_model = torch.jit.load(_MODEL_PATH, map_location="cpu")
+_model.eval()
 
 
 def _fire_mask(hsv: np.ndarray) -> np.ndarray:
@@ -33,6 +55,15 @@ def _smoke_mask(hsv: np.ndarray, gray: np.ndarray) -> np.ndarray:
     return cv2.bitwise_and(low_sat, texture_mask)
 
 
+def _model_predict(frame: np.ndarray):
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    tensor = _TRANSFORM(Image.fromarray(rgb)).unsqueeze(0)
+    with torch.no_grad():
+        probs = torch.softmax(_model(tensor), dim=1)[0]
+    idx = int(torch.argmax(probs))
+    return _MODEL_CLASSES[idx], float(probs[idx])
+
+
 def analyze_frame(frame: np.ndarray) -> dict:
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -44,14 +75,21 @@ def analyze_frame(frame: np.ndarray) -> dict:
     fire_pct = round((fire_mask > 0).sum() / total_px * 100, 2)
     smoke_pct = round((smoke_mask > 0).sum() / total_px * 100, 2)
 
-    fire_detected = fire_pct >= settings.sensitivity_pct
-    smoke_detected = smoke_pct >= settings.sensitivity_pct * 2  # smoke heuristic is noisier - require more coverage
+    heuristic_fire = fire_pct >= settings.sensitivity_pct
+    heuristic_smoke = smoke_pct >= settings.sensitivity_pct * 2  # smoke heuristic is noisier - require more coverage
+
+    predicted_class, model_conf = _model_predict(frame)
+    model_fire = predicted_class == "fire"
+    model_smoke = predicted_class == "smoke"
+
+    fire_detected = heuristic_fire or model_fire
+    smoke_detected = heuristic_smoke or model_smoke
 
     confidence = 0.0
     if fire_detected:
-        confidence = max(confidence, min(0.4 + fire_pct * 0.03, 0.9))
+        confidence = max(confidence, min(0.4 + fire_pct * 0.03, 0.9), model_conf if model_fire else 0.0)
     if smoke_detected:
-        confidence = max(confidence, min(0.25 + smoke_pct * 0.015, 0.6))
+        confidence = max(confidence, min(0.25 + smoke_pct * 0.015, 0.6), model_conf if model_smoke else 0.0)
 
     return {
         "fire_detected": bool(fire_detected),

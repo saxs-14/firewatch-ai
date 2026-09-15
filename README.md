@@ -25,19 +25,22 @@ with a confidence score, logging every check as an auditable alert history.
 ```text
 frontend (React/Vite/TS/Tailwind)  ->  backend (FastAPI)  ->  SQLite
                                               |
-                                     HSV colour-threshold fire/smoke heuristic
+                            MobileNetV2 fire/smoke/neutral classifier (trained)
+                                  + HSV colour-threshold heuristic (ensemble)
 ```
 
 ## Technology stack
 
-Python, FastAPI, SQLAlchemy, SQLite, OpenCV; React, TypeScript, Vite, Tailwind CSS.
+Python, FastAPI, SQLAlchemy, SQLite, OpenCV, PyTorch/TorchVision; React, TypeScript, Vite,
+Tailwind CSS.
 
 ## Folder structure
 
 ```text
 firewatch-ai/
 ├── backend/
-│   ├── app/          # FastAPI app, detection heuristic
+│   ├── app/
+│   │   └── ml_model/  # Trained TorchScript classifier (firewatch_classifier.pt)
 │   ├── demo/           # Bundled sample images
 │   └── tests/
 ├── frontend/
@@ -107,17 +110,23 @@ by this system.
 ## Limitations — read before demoing
 
 **This system is an early-warning prototype and must not replace certified fire detection
-systems.** Detection is HSV colour thresholding (fire) plus a texture/brightness heuristic
-(smoke) — both are classical, precedented baseline techniques, not deep-learning models:
+systems.** Detection combines a trained model with the original HSV heuristic:
 
-- Fire detection will false-positive on other orange/red/yellow objects (sunsets, orange
-  clothing, warning signage) and false-negative on fires whose flame colour falls outside
-  the configured HSV ranges.
-- Smoke detection is the noisier of the two — grey, textured surfaces (fog, dust, certain
-  fabrics) can trigger it; the sensitivity threshold is set higher for smoke than fire to
-  partly compensate.
-- No motion-based confirmation — a single still image showing fire-like colour will alert
-  the same as a live flame.
+- **A MobileNetV2 transfer-learning classifier** (frozen ImageNet backbone + trained
+  classifier head) fine-tuned on the DeepQuestAI Fire-Smoke-Dataset (2,700 images,
+  fire/smoke/neutral), reaching 94.8% held-out validation accuracy. It predicts a single
+  class per frame, so a frame showing both fire and smoke together will only register as
+  whichever the model judges dominant — the HSV coverage percentages (below) still report
+  both independently.
+- **HSV colour thresholding (fire) plus a texture/brightness heuristic (smoke)** — the
+  original classical baseline — still runs alongside the model and can independently
+  trigger an alert. An alert fires if *either* signal detects something, which trades a
+  higher false-positive rate for a lower chance of missing a real fire/smoke event.
+  Fire detection will still false-positive on other orange/red/yellow objects (sunsets,
+  orange clothing, warning signage); smoke detection is the noisier of the two (grey,
+  textured surfaces like fog or dust can trigger it).
+- No motion-based confirmation — a single still image showing fire-like colour or the
+  model's fire class will alert the same as a live flame.
 
 ## Business model
 
